@@ -1,0 +1,211 @@
+// Samayak Admin Panel - Prisma Schema
+// PostgreSQL with strict FK constraints and explicit indexing
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  DEAN
+  HOD
+  COORDINATOR
+  PROFESSOR
+}
+
+enum RoomType {
+  CLASSROOM
+  LAB
+  OTHER
+}
+
+enum CourseType {
+  LECTURE
+  LAB
+  TUTORIAL
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+}
+
+enum Period {
+  I
+  II
+  III
+  IV
+  V
+  VII
+  VIII
+  IX
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  DONE
+  FAILED
+}
+
+// ─── DEPARTMENT ───────────────────────────────────────────────────────────────
+
+model Department {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(200)
+  code      String   @unique @db.VarChar(20)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branches Branch[]
+  rooms    Room[]
+  users    User[]
+
+  @@index([name])
+  @@index([code])
+  @@map("departments")
+}
+
+// ─── BRANCH ───────────────────────────────────────────────────────────────────
+
+model Branch {
+  id           Int        @id @default(autoincrement())
+  name         String     @db.VarChar(200)
+  code         String     @db.VarChar(20)
+  departmentId Int
+  createdAt    DateTime   @default(now())
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  courses    Course[]
+
+  @@unique([code, departmentId])
+  @@index([departmentId])
+  @@map("branches")
+}
+
+// ─── ROOM ─────────────────────────────────────────────────────────────────────
+
+model Room {
+  id           Int      @id @default(autoincrement())
+  roomNumber   String   @db.VarChar(50)
+  departmentId Int
+  capacity     Int?
+  type         RoomType @default(CLASSROOM)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  department Department      @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  slots      TimetableSlot[]
+
+  // Composite unique: same room number can exist in different departments
+  @@unique([roomNumber, departmentId])
+  @@index([departmentId])
+  @@index([type])
+  @@map("rooms")
+}
+
+// ─── COURSE ───────────────────────────────────────────────────────────────────
+
+model Course {
+  id       Int        @id @default(autoincrement())
+  code     String     @db.VarChar(20)
+  name     String     @db.VarChar(300)
+  credits  Decimal    @db.Decimal(4, 1)  // supports NC=0, 1.5, 2, 3, 4
+  type     CourseType
+  branchId Int
+  semester Int        @db.SmallInt
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  branch Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  slots  TimetableSlot[]
+
+  @@unique([code, branchId, semester])
+  @@index([branchId])
+  @@index([semester])
+  @@index([code])
+  @@map("courses")
+}
+
+// ─── USER / FACULTY ───────────────────────────────────────────────────────────
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(200)
+  email        String   @unique @db.VarChar(320)
+  passwordHash String    @db.VarChar(72)
+  role         Role     @default(PROFESSOR)
+  departmentId Int
+  isDeleted    Boolean  @default(false)
+  deletedAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  department Department      @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  slots      TimetableSlot[]
+
+  @@index([email])
+  @@index([departmentId])
+  @@index([role])
+  @@index([isDeleted])
+  @@map("users")
+}
+
+// ─── TIMETABLE SLOT ───────────────────────────────────────────────────────────
+
+model TimetableSlot {
+  id        Int       @id @default(autoincrement())
+  courseId  Int
+  roomId    Int
+  facultyId Int?
+  dayOfWeek DayOfWeek
+  period    Period
+  semester  Int       @db.SmallInt
+  branch    String    @db.VarChar(20)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  course  Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  room    Room   @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  faculty User?  @relation(fields: [facultyId], references: [id], onDelete: SetNull)
+
+  @@unique([roomId, dayOfWeek, period, semester, branch])
+  @@index([courseId])
+  @@index([roomId])
+  @@index([facultyId])
+  @@index([dayOfWeek])
+  @@index([period])
+  @@map("timetable_slots")
+}
+
+// ─── INGESTION JOB ────────────────────────────────────────────────────────────
+
+model IngestionJob {
+  id          String    @id @default(uuid())
+  type        String    @db.VarChar(50)
+  status      JobStatus @default(QUEUED)
+  filename    String?   @db.VarChar(500)
+  totalRows   Int?
+  createdRows Int       @default(0)
+  matchedRows Int       @default(0)
+  failedRows  Int       @default(0)
+  errorLog    Json?
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([status])
+  @@index([type])
+  @@map("ingestion_jobs")
+}
