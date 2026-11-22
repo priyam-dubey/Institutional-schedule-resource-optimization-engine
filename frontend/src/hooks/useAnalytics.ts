@@ -13,7 +13,7 @@ export function useAnalytics() {
         queryClient.invalidateQueries({ queryKey: ['analytics'] });
       }
     });
-    return unsub;
+    return () => { unsub(); };
   }, [queryClient]);
 
   return useQuery<AnalyticsData>({

@@ -1,6 +1,6 @@
 import { Queue } from "bullmq";
 import { getRedis } from "./redis";
-const conn = { createClient: () => getRedis() };
+const conn = getRedis();
 export const csvImportQueue = new Queue("csv-import", { connection: conn });
 export const pdfParseQueue  = new Queue("pdf-parse",  { connection: conn });
 export const analyticsQueue = new Queue("analytics-recompute", { connection: conn });

@@ -164,7 +164,7 @@ const worker = new Worker<AnalyticsJobData>(
     }
   },
   {
-    connection: { createClient: () => getRedis() },
+    connection: getRedis(),
     concurrency: 1,
     // Deduplicate: if a recompute is already queued, skip adding another
     settings: { backoffStrategy: () => 2000 },

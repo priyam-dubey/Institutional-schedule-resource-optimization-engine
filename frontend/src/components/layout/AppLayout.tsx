@@ -4,15 +4,19 @@ import {
   LayoutDashboard, Building2, DoorOpen, BookOpen, Users,
   CalendarDays, FileText, Upload, Activity, LogOut, Bell, RefreshCw
 } from 'lucide-react';
-import { useAuthStore } from '../../lib/authStore';
+import type { LucideIcon } from 'lucide-react';
+import { useAuthStore, ROLE_LEVEL, type Role } from '../../lib/authStore';
 import { clsx } from 'clsx';
 import { RoleBadge } from '../ui';
 
-const NAV_ITEMS = [
+interface NavItem { to: string; icon: LucideIcon; label: string; live?: boolean; minRole?: Role }
+interface NavSection { section: string; items: NavItem[] }
+
+const NAV_ITEMS: NavSection[] = [
   { section: 'Overview',
     items: [
       { to: '/dashboard',    icon: LayoutDashboard, label: 'Dashboard',   live: true },
-      { to: '/health',       icon: Activity,        label: 'System Health' },
+      { to: '/health',       icon: Activity,        label: 'System Health', minRole: 'ADMIN' },
     ]
   },
   { section: 'Academic Data',
@@ -20,14 +24,14 @@ const NAV_ITEMS = [
       { to: '/departments', icon: Building2,   label: 'Departments' },
       { to: '/rooms',       icon: DoorOpen,    label: 'Rooms' },
       { to: '/courses',     icon: BookOpen,    label: 'Courses' },
-      { to: '/faculty',     icon: Users,       label: 'Faculty & Users', badge: 0 },
+      { to: '/faculty',     icon: Users,       label: 'Faculty & Users' },
     ]
   },
   { section: 'Operations',
     items: [
       { to: '/timetable',     icon: CalendarDays, label: 'Timetable' },
-      { to: '/pdf-ingestion', icon: FileText,     label: 'PDF Ingestion' },
-      { to: '/bulk-import',   icon: Upload,       label: 'Bulk Import' },
+      { to: '/pdf-ingestion', icon: FileText,     label: 'PDF Ingestion', minRole: 'COORDINATOR' },
+      { to: '/bulk-import',   icon: Upload,       label: 'Bulk Import',   minRole: 'COORDINATOR' },
     ]
   },
 ];
@@ -61,7 +65,7 @@ export default function AppLayout() {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto p-3 space-y-4">
-          {NAV_ITEMS.map(section => (
+          {NAV_ITEMS.map(section => ({ ...section, items: section.items.filter(i => !i.minRole || (user && ROLE_LEVEL[user.role] >= ROLE_LEVEL[i.minRole])) })).filter(section => section.items.length > 0).map(section => (
             <div key={section.section}>
               <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest px-3 mb-1.5">
                 {section.section}
@@ -80,9 +84,6 @@ export default function AppLayout() {
                     <span className="flex-1 truncate">{item.label}</span>
                     {item.live && (
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    )}
-                    {typeof item.badge === 'number' && item.badge > 0 && (
-                      <span className="text-[10px] font-bold bg-red-500 text-white rounded-full px-1.5 py-px">{item.badge}</span>
                     )}
                   </NavLink>
                 ))}
@@ -108,7 +109,7 @@ export default function AppLayout() {
           </div>
           {user?.role && (
             <div className="mt-2 px-1">
-              <RoleBadge role={user.role as any} />
+              <RoleBadge role={user.role} />
             </div>
           )}
         </div>

@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, FileText, CheckCircle2, XCircle, Loader2, AlertCircle } from 'lucide-react';
 import { api } from '../../lib/api';
-import { StatusBadge, Modal } from './index';
+import { Badge, Modal } from './index';
 import toast from 'react-hot-toast';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -46,12 +46,13 @@ function BulkImportModal({ open, onClose, endpoint, entity, templateColumns, onS
   const { data: jobStatus } = useQuery({
     queryKey: ['import-job', jobId],
     queryFn: async () => {
-      const res = await api.get(`/timetable/jobs/${jobId}`);
+      const res = await api.get(`/upload/job/${jobId}`);
       return res.data;
     },
     enabled: !!jobId,
-    refetchInterval: (data) => {
-      if (!data || ['DONE', 'FAILED'].includes(data.status)) return false;
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (!status || ['DONE', 'FAILED'].includes(status)) return false;
       return 1500;
     },
   });
@@ -150,7 +151,7 @@ function BulkImportModal({ open, onClose, endpoint, entity, templateColumns, onS
           <div className="border border-surface-border rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-slate-700">Processing status</span>
-              <StatusBadge status={jobStatus.status} />
+              <Badge color={jobStatus.status === 'DONE' ? 'green' : jobStatus.status === 'FAILED' ? 'red' : 'blue'}>{jobStatus.status}</Badge>
             </div>
 
             {['PARSING', 'INTEGRATING'].includes(jobStatus.status) && (

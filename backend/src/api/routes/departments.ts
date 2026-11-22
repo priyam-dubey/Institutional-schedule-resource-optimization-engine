@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../../lib/prisma";
-import { authenticate, requireRole } from "../../middleware/rbac";
+import { authenticate, requireRole, requireDepartmentAccess } from "../../middleware/rbac";
 import { analyticsQueue } from "../../lib/queues";
 import { z } from "zod";
 
@@ -29,7 +29,7 @@ router.get("/", authenticate, async (req, res) => {
 });
 
 // POST /api/departments
-router.post("/", authenticate, requireRole("COORDINATOR"), async (req, res) => {
+router.post("/", authenticate, requireRole("DEAN"), async (req, res) => {
   const parsed = DeptSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.issues, correlationId: req.correlationId });
 
@@ -44,7 +44,7 @@ router.post("/", authenticate, requireRole("COORDINATOR"), async (req, res) => {
 });
 
 // PUT /api/departments/:id
-router.put("/:id", authenticate, requireRole("COORDINATOR"), async (req, res) => {
+router.put("/:id", authenticate, requireRole("HOD"), requireDepartmentAccess((req) => Number(req.params.id)), async (req, res) => {
   const parsed = DeptSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.issues });
 
@@ -58,7 +58,7 @@ router.put("/:id", authenticate, requireRole("COORDINATOR"), async (req, res) =>
 });
 
 // DELETE /api/departments/:id
-router.delete("/:id", authenticate, requireRole("HOD"), async (req, res) => {
+router.delete("/:id", authenticate, requireRole("DEAN"), async (req, res) => {
   // Check for dependents before deletion
   const dept = await prisma.department.findUnique({
     where: { id: Number(req.params.id) },

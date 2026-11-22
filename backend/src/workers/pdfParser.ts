@@ -365,7 +365,7 @@ const worker = new Worker<PdfParseJobData>(
     }
   },
   {
-    connection: { createClient: () => getRedis() },
+    connection: getRedis(),
     concurrency: 1, // PDF parsing is CPU-heavy; keep concurrency low
   }
 );

@@ -1,10 +1,16 @@
 import { create } from 'zustand';
+import { disconnectWebSocket } from './api';
+
+export type Role = 'ADMIN' | 'DEAN' | 'HOD' | 'COORDINATOR' | 'PROFESSOR';
+
+export const ROLE_LEVEL: Record<Role, number> = { ADMIN: 5, DEAN: 4, HOD: 3, COORDINATOR: 2, PROFESSOR: 1 };
 
 interface User {
-  id: string;
+  id: number;
   name: string;
   email: string;
-  role: string;
+  role: Role;
+  departmentId?: number;
 }
 
 interface AuthState {
@@ -26,6 +32,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ token, user });
   },
   logout: () => {
+    disconnectWebSocket();
     localStorage.removeItem('samayak_token');
     localStorage.removeItem('samayak_user');
     set({ token: null, user: null });

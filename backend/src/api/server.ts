@@ -14,11 +14,14 @@ import { createServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { correlationIdMiddleware } from "../middleware/correlationId";
 import { getRedis } from "../lib/redis";
+import { corsOrigins } from "../lib/config";
+import { verifyToken } from "../middleware/rbac";
 
 // Route imports
 import healthRouter      from "./routes/health";
 import authRouter from "./routes/auth";
 import departmentsRouter from "./routes/departments";
+import branchesRouter    from "./routes/branches";
 import roomsRouter       from "./routes/rooms";
 import coursesRouter     from "./routes/courses";
 import facultyRouter     from "./routes/faculty";
@@ -31,7 +34,11 @@ const httpServer = createServer(app);
 
 // ─── CORE MIDDLEWARE ──────────────────────────────────────────────────────────
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: process.env.CORS_ORIGIN ?? "*", credentials: true }));
+const allowedOrigins = corsOrigins();
+app.use(cors({
+  origin: (origin, cb) => (!origin || allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error("Origin not allowed by CORS"))),
+  credentials: true,
+}));
 app.use(express.json({ limit: "1mb" }));
 app.use(correlationIdMiddleware);
 
@@ -46,6 +53,7 @@ app.use((req, _res, next) => {
 app.use("/api",              healthRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/departments",  departmentsRouter);
+app.use("/api/branches",     branchesRouter);
 app.use("/api/rooms",        roomsRouter);
 app.use("/api/courses",      coursesRouter);
 app.use("/api/users",        facultyRouter);
@@ -53,46 +61,66 @@ app.use("/api/timetable",    timetableRouter);
 app.use("/api/analytics",    analyticsRouter);
 app.use("/api/upload",       uploadRouter);
 
-// ─── WEBSOCKET — LIVE ANALYTICS PUSH ─────────────────────────────────────────
-// When the analytics worker publishes to Redis channel "samayak:analytics:updated",
-// this server fans out the update notification to all connected WS clients.
-// Clients re-fetch GET /api/analytics on receipt of the "analytics:updated" event.
-const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+// ─── WEBSOCKET — AUTHENTICATED LIVE EVENTS ───────────────────────────────────
+// Clients connect to /ws?token=<JWT>. The upgrade is rejected (401) unless the
+// token verifies, so unauthenticated sockets never receive any event.
+// Workers publish JSON to Redis channels; this process fans them out.
+const wss = new WebSocketServer({ noServer: true });
 const wsClients = new Set<WebSocket>();
+
+httpServer.on("upgrade", (req, socket, head) => {
+  const url = new URL(req.url ?? "", "http://localhost");
+  if (url.pathname !== "/ws") {
+    socket.destroy();
+    return;
+  }
+  const origin = req.headers.origin;
+  if (origin && !allowedOrigins.includes(origin)) {
+    socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  const user = verifyToken(url.searchParams.get("token") ?? "");
+  if (!user) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+});
 
 wss.on("connection", (ws: WebSocket) => {
   wsClients.add(ws);
-  console.log("[WS] Client connected. Total=" + wsClients.size);
-
-  ws.on("close", () => {
-    wsClients.delete(ws);
-    console.log("[WS] Client disconnected. Total=" + wsClients.size);
-  });
-
+  ws.on("close", () => wsClients.delete(ws));
   ws.on("error", (err) => console.error("[WS] Error:", err.message));
-
-  // Send current analytics immediately on connect
   ws.send(JSON.stringify({ type: "connected", ts: new Date().toISOString() }));
 });
 
-// Subscribe to Redis pub/sub channel for analytics updates
+// Channels: analytics updates (existing) and generic job/timetable events.
+const CHANNELS = ["samayak:analytics:updated", "samayak:events"] as const;
 const subRedis = getRedis().duplicate();
-subRedis.subscribe("samayak:analytics:updated", (err) => {
+subRedis.subscribe(...CHANNELS, (err) => {
   if (err) console.error("[WS] Redis subscribe error:", err.message);
-  else console.log("[WS] Subscribed to samayak:analytics:updated");
 });
-
-subRedis.on("message", (_channel: string, message: string) => {
-  const payload = JSON.stringify({ type: "analytics:updated", data: JSON.parse(message) });
-  wsClients.forEach(client => {
+subRedis.on("message", (channel: string, message: string) => {
+  let data: unknown;
+  try {
+    data = JSON.parse(message);
+  } catch {
+    console.error("[WS] Ignoring non-JSON message on " + channel);
+    return;
+  }
+  // samayak:events messages already look like { type, ... }; analytics messages are wrapped.
+  const payload = channel === "samayak:events" ? JSON.stringify(data) : JSON.stringify({ type: "analytics:updated", data });
+  wsClients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) client.send(payload);
   });
-  console.log("[WS] Broadcasted analytics:updated to " + wsClients.size + " client(s)");
 });
 
 // ─── GLOBAL ERROR HANDLER ─────────────────────────────────────────────────────
 app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error("[ERROR] corr=" + req.correlationId, err.message);
+  if (err.message === "Origin not allowed by CORS") return res.status(403).json({ error: "Forbidden origin", correlationId: req.correlationId });
   res.status(500).json({
     error: "Internal Server Error",
     correlationId: req.correlationId,

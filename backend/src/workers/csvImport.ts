@@ -8,6 +8,8 @@ import { parse } from "csv-parse/sync";
 import * as xlsx from "xlsx";
 import fs from "fs";
 import path from "path";
+import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { prisma } from "../lib/prisma";
 import { getRedis } from "../lib/redis";
 import { analyticsQueue } from "../lib/queues";
@@ -149,7 +151,8 @@ async function importUsers(rows: ParsedRow[]): Promise<ImportResult> {
       if (!dept) throw new Error("Department '" + row.department_code + "' not found");
       await prisma.user.upsert({
         where: { email: row.email.toLowerCase().trim() },
-        create: { name: row.name.trim(), email: row.email.toLowerCase().trim(), role: role as any, departmentId: dept.id },
+        // Imported accounts get an unguessable password nobody knows; an ADMIN issues a real one via PUT /api/users/:id/password.
+        create: { name: row.name.trim(), email: row.email.toLowerCase().trim(), role: role as any, departmentId: dept.id, passwordHash: await bcrypt.hash(crypto.randomBytes(24).toString("base64url"), 10) },
         update: { name: row.name.trim(), role: role as any },
       });
       result.created++;
@@ -200,7 +203,7 @@ const worker = new Worker<CsvImportJobData>(
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     }
   },
-  { connection: { createClient: () => getRedis() }, concurrency: 2 }
+  { connection: getRedis(), concurrency: 2 }
 );
 
 worker.on("failed", (job, err) =>

@@ -39,9 +39,9 @@ router.get("/", authenticate, async (req, res) => {
 
   // Attach scheduled slot count vs required
   const allSlots = await prisma.timetableSlot.groupBy({ by: ["courseId"], _count: { id: true } });
-  const slotMap = new Map(allSlots.map(s => [s.courseId, s._count.id]));
+  const slotMap = new Map<number, number>(allSlots.map((s: { courseId: number; _count: { id: number } }) => [s.courseId, s._count.id]));
 
-  const enriched = courses.map(c => {
+  const enriched = courses.map((c: (typeof courses)[number]) => {
     const scheduled = slotMap.get(c.id) ?? 0;
     const required  = Math.ceil(Number(c.credits) * 2);
     return { ...c, scheduled, required, underRunning: Number(c.credits) > 0 && scheduled < required };

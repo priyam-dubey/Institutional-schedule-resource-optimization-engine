@@ -7,7 +7,7 @@ const router = Router();
 
 router.get("/health", async (req, res) => {
   const start = Date.now();
-  const status: Record<string, unknown> = {};
+  const status: Record<string, any> = {};
 
   // DB check
   try {

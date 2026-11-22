@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { prisma } from "../../lib/prisma";
-import { authenticate, requireRole } from "../../middleware/rbac";
+import { authenticate, requireRole, requireDepartmentAccess } from "../../middleware/rbac";
 import { analyticsQueue } from "../../lib/queues";
 
 const router = Router();
@@ -39,10 +39,10 @@ router.get("/", authenticate, async (req, res) => {
     by: ["roomId"],
     _count: { id: true },
   });
-  const slotMap = new Map(allSlots.map(s => [s.roomId, s._count.id]));
+  const slotMap = new Map<number, number>(allSlots.map((s: { roomId: number; _count: { id: number } }) => [s.roomId, s._count.id]));
 
   const PERIODS_PER_DAY = 8, WORKING_DAYS = 5;
-  const roomsWithUtil = rooms.map(r => ({
+  const roomsWithUtil = rooms.map((r: (typeof rooms)[number]) => ({
     ...r,
     occupiedSlots: slotMap.get(r.id) ?? 0,
     availableSlots: PERIODS_PER_DAY * WORKING_DAYS,
@@ -54,7 +54,7 @@ router.get("/", authenticate, async (req, res) => {
 });
 
 // POST /api/rooms
-router.post("/", authenticate, requireRole("COORDINATOR"), async (req, res) => {
+router.post("/", authenticate, requireRole("COORDINATOR"), requireDepartmentAccess((req) => (typeof req.body?.departmentId === "number" ? req.body.departmentId : undefined)), async (req, res) => {
   const parsed = RoomSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.issues, correlationId: req.correlationId });
 
@@ -69,7 +69,7 @@ router.post("/", authenticate, requireRole("COORDINATOR"), async (req, res) => {
 });
 
 // PUT /api/rooms/:id
-router.put("/:id", authenticate, requireRole("COORDINATOR"), async (req, res) => {
+router.put("/:id", authenticate, requireRole("COORDINATOR"), requireDepartmentAccess(async (req) => (await prisma.room.findUnique({ where: { id: Number(req.params.id) }, select: { departmentId: true } }))?.departmentId), async (req, res) => {
   const parsed = RoomSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.issues });
 
@@ -84,7 +84,7 @@ router.put("/:id", authenticate, requireRole("COORDINATOR"), async (req, res) =>
 });
 
 // DELETE /api/rooms/:id — blocked if timetable slots reference it
-router.delete("/:id", authenticate, requireRole("HOD"), async (req, res) => {
+router.delete("/:id", authenticate, requireRole("HOD"), requireDepartmentAccess(async (req) => (await prisma.room.findUnique({ where: { id: Number(req.params.id) }, select: { departmentId: true } }))?.departmentId), async (req, res) => {
   const slotCount = await prisma.timetableSlot.count({ where: { roomId: Number(req.params.id) } });
   if (slotCount > 0) {
     return res.status(409).json({

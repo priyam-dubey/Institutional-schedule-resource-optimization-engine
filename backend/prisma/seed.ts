@@ -5,15 +5,17 @@
  * Run: npm run prisma:seed
  */
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { PrismaClient } from "@prisma/client";
-import bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
 
 
 
 async function main() {
-  const defaultHash = await bcrypt.hash("Samayak@2026", 12);
+  // No credential is committed to the repo. Provide SEED_PASSWORD, or a random one is generated and printed once.
+  const seedPassword = process.env.SEED_PASSWORD ?? crypto.randomBytes(12).toString("base64url");
+  const defaultHash = await bcrypt.hash(seedPassword, 12);
   console.log("Seeding Samayak database...");
 
   // ── Departments ─────────────────────────────────────────────────────────────
@@ -155,6 +157,16 @@ async function main() {
   }
 
   console.log("Faculty seeded");
+
+  // Bootstrap administrator (needed to log in at all).
+  const adminEmail = (process.env.SEED_ADMIN_EMAIL ?? "admin@example.edu").toLowerCase();
+  await prisma.user.upsert({
+    where: { email: adminEmail },
+    create: { name: "System Administrator", email: adminEmail, role: "ADMIN", departmentId: cse.id, passwordHash: defaultHash },
+    update: {},
+  });
+  console.log("Admin account: " + adminEmail);
+  if (!process.env.SEED_PASSWORD) console.log("Generated password for ALL seeded accounts (shown once): " + seedPassword);
   console.log("Seed complete.");
 }
 
