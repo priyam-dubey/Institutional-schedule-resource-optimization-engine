@@ -263,7 +263,7 @@ export interface ValidationReport {
   totalViolations: number;
 }
 
-export async function validateGeneration(generationId: number, client: Db = db()): Promise<ValidationReport> {
+export async function analyzeGeneration(generationId: number, client: Db = db()) {
   const gen = await client.timetableGeneration.findUnique({ where: { id: generationId } });
   if (!gen) throw new HttpError(404, "Generation not found");
   const built = await buildInput({ semesterId: gen.semesterId, sectionIds: gen.sectionIds, mode: "validate", generationId, db: client });
@@ -271,7 +271,12 @@ export async function validateGeneration(generationId: number, client: Db = db()
   const mustBeComplete = new Set(
     [...built.reqMeta.entries()].filter(([, m]) => m.requirementId !== null && primary.has(m.sectionId)).map(([id]) => id),
   );
-  const all: Violation[] = validateAssignments(built.input, built.assignments, { requireComplete: mustBeComplete });
+  const raw: Violation[] = validateAssignments(built.input, built.assignments, { requireComplete: mustBeComplete });
+  return { gen, built, raw };
+}
+
+export async function validateGeneration(generationId: number, client: Db = db()): Promise<ValidationReport> {
+  const { built, raw: all } = await analyzeGeneration(generationId, client);
   const hard = all.filter((v) => v.type !== "SESSION_COUNT_UNMET");
   const incomplete = all.some((v) => v.type === "SESSION_COUNT_UNMET");
   const toView = (v: Violation) => {
@@ -289,6 +294,51 @@ export async function validateGeneration(generationId: number, client: Db = db()
   return { valid: hard.length === 0, complete: !incomplete, violations: list.slice(0, 200), totalViolations: list.length };
 }
 
+/**
+ * Re-derives HARD and UNASSIGNED conflict rows (and counters) from the stored entries.
+ * Called after every manual edit so the review screens always reflect the real state.
+ */
+export async function refreshConflicts(generationId: number, client: Db) {
+  const { gen, built, raw } = await analyzeGeneration(generationId, client);
+  await client.generationConflict.deleteMany({ where: { generationId, kind: { in: ["HARD", "UNASSIGNED"] } } });
+  const rows: Prisma.GenerationConflictCreateManyInput[] = [];
+  const counts = new Map<string, number>();
+  for (const a of built.assignments) counts.set(a.requirementId, (counts.get(a.requirementId) ?? 0) + 1);
+  const primary = new Set(gen.sectionIds);
+  let unassigned = 0;
+  let total = 0;
+  for (const r of built.input.requirements) {
+    const m = built.reqMeta.get(r.id);
+    if (!m || m.requirementId === null || !primary.has(m.sectionId)) continue;
+    total += r.sessionsPerWeek;
+    const got = counts.get(r.id) ?? 0;
+    for (let k = got; k < r.sessionsPerWeek; k++) {
+      unassigned++;
+      rows.push({ generationId, kind: "UNASSIGNED", code: "UNASSIGNED_SESSION", message: `${m.label}: ${r.sessionsPerWeek - got} of ${r.sessionsPerWeek} sessions are not scheduled`, requirementId: m.requirementId, sectionId: m.sectionId, details: { missing: r.sessionsPerWeek - got } as Prisma.InputJsonValue });
+      break; // one row per requirement
+    }
+  }
+  let hard = 0;
+  for (const v of raw) {
+    if (v.type === "SESSION_COUNT_UNMET") continue;
+    hard++;
+    const m = v.requirementId ? built.reqMeta.get(v.requirementId) : undefined;
+    rows.push({
+      generationId, kind: "HARD", code: v.type, message: v.message,
+      requirementId: m?.requirementId ?? null, sectionId: m?.sectionId ?? null,
+      facultyProfileId: v.facultyId ? num(v.facultyId) : null, roomId: v.roomId ? num(v.roomId) : null,
+      day: v.day !== undefined && v.day >= 0 ? (built.days[v.day] ?? null) : null, periodIndex: v.period ?? null,
+    });
+  }
+  if (rows.length) await client.generationConflict.createMany({ data: rows });
+  const assigned = built.assignments.filter((a) => primary.has(built.reqMeta.get(a.requirementId)?.sectionId ?? -1)).length;
+  await client.timetableGeneration.update({
+    where: { id: generationId },
+    data: { solveStatus: hard ? "INVALID" : unassigned ? "PARTIAL" : "COMPLETE", assignedSessions: assigned, totalSessions: total },
+  });
+  return { hard, unassigned };
+}
+
 export async function publishGeneration(
   generationId: number,
   user: AuthUser,
@@ -304,7 +354,7 @@ export async function publishGeneration(
       if (fresh.status !== "COMPLETED") throw new HttpError(409, `Only a COMPLETED generation can be published (this one is ${fresh.status})`);
       if (fresh.publishStatus === "PUBLISHED") throw new HttpError(409, "This generation is already published");
       if (fresh.publishStatus === "ARCHIVED") throw new HttpError(409, "Archived generations cannot be published; create a new generation");
-      if (fresh.solveStatus === "INVALID") throw new HttpError(409, "The solver reported an invalid result; regenerate before publishing", undefined, "INVALID_RESULT");
+      // solveStatus is informational; the validation below is the gate.
       const entryCount = await tx.timetableEntry.count({ where: { generationId } });
       if (entryCount === 0) throw new HttpError(409, "The timetable has no entries", undefined, "EMPTY");
 

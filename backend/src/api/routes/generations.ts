@@ -4,6 +4,7 @@ import { prisma } from "../../lib/prisma";
 import { authenticate, requireRole } from "../../middleware/rbac";
 import { asyncHandler, HttpError } from "../../lib/httpError";
 import { generationQueue } from "../../lib/queues";
+import { AddEntrySchema, EditSchema, addEntry, cloneGeneration, deleteEntry, editEntry, getTimetable } from "../../services/timetableService";
 import {
   archiveGeneration, cancelGeneration, createGeneration, publishGeneration,
   regenerate, unpublishGeneration, validateGeneration, type Enqueuer,
@@ -73,6 +74,38 @@ router.get("/:id/conflicts", asyncHandler(async (req, res) => {
   const kind = req.query.kind ? z.enum(["HARD", "UNASSIGNED", "INFEASIBLE"]).parse(req.query.kind) : undefined;
   const items = await prisma.generationConflict.findMany({ where: { generationId: id, ...(kind ? { kind } : {}) }, orderBy: { id: "asc" }, take: 1000 });
   res.json({ items });
+}));
+
+router.get("/:id/entries", asyncHandler(async (req, res) => {
+  const q = z.object({
+    sectionId: z.coerce.number().int().positive().optional(),
+    batchId: z.coerce.number().int().positive().optional(),
+    facultyProfileId: z.coerce.number().int().positive().optional(),
+    roomId: z.coerce.number().int().positive().optional(),
+    day: z.enum(["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]).optional(),
+  }).parse(req.query);
+  res.json(await getTimetable(idParam(req.params.id), q));
+}));
+
+router.patch("/:id/entries/:entryId", requireRole("HOD"), asyncHandler(async (req, res) => {
+  const g = await loadAccessible(req, idParam(req.params.id));
+  res.json(await editEntry(g.id, idParam(req.params.entryId), EditSchema.parse(req.body)));
+}));
+
+router.post("/:id/entries", requireRole("HOD"), asyncHandler(async (req, res) => {
+  const g = await loadAccessible(req, idParam(req.params.id));
+  res.status(201).json(await addEntry(g.id, AddEntrySchema.parse(req.body)));
+}));
+
+router.delete("/:id/entries/:entryId", requireRole("HOD"), asyncHandler(async (req, res) => {
+  const g = await loadAccessible(req, idParam(req.params.id));
+  await deleteEntry(g.id, idParam(req.params.entryId));
+  res.status(204).end();
+}));
+
+router.post("/:id/clone", requireRole("HOD"), asyncHandler(async (req, res) => {
+  const g = await loadAccessible(req, idParam(req.params.id));
+  res.status(201).json(await cloneGeneration(g.id, req.user!.id));
 }));
 
 router.get("/:id/validate", requireRole("COORDINATOR"), asyncHandler(async (req, res) => {
