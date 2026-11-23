@@ -11,6 +11,9 @@ const RoomSchema = z.object({
   departmentId: z.number().int().positive(),
   capacity:     z.number().int().positive().nullable().optional(),
   type:         z.enum(["CLASSROOM", "LAB", "OTHER"]).default("CLASSROOM"),
+  building:     z.string().max(100).nullable().optional(),
+  equipment:    z.array(z.string().min(1).max(50)).max(30).optional(),
+  isActive:     z.boolean().optional(),
 });
 
 // GET /api/rooms?search=&dept=&type=&page=1&limit=20

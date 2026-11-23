@@ -760,7 +760,7 @@ export function preflightProofs(input: SchedulerInput): InfeasibilityProof[] {
       (r) => req.roomTypes.includes(r.type) && r.capacity >= req.strength && (!allowedSet || allowedSet.has(r.id)),
     );
     if (rooms.length === 0)
-      out.push({ kind: "NO_ROOM", message: `${label}: no ${req.roomTypes.join("/")} room holds ${req.strength} students` });
+      out.push({ kind: "NO_ROOM", message: `${label}: no ${req.roomTypes.join("/")} room holds ${req.strength} students${req.allowedRoomIds ? " and has the required equipment" : ""}` });
   }
 
   const groupLoad = new Map<string, number>();

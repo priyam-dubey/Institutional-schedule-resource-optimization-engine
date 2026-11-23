@@ -29,6 +29,7 @@ import timetableRouter   from "./routes/timetable";
 import analyticsRouter   from "./routes/analytics";
 import uploadRouter      from "./routes/upload";
 import generationsRouter from "./routes/generations";
+import academicRouter from "./routes/academic";
 import { apiErrorHandler } from "../lib/httpError";
 
 const app = express();
@@ -63,6 +64,7 @@ app.use("/api/timetable",    timetableRouter);
 app.use("/api/analytics",    analyticsRouter);
 app.use("/api/upload",       uploadRouter);
 app.use("/api/generations",  generationsRouter);
+app.use("/api",              academicRouter);
 app.use("/api", apiErrorHandler);
 
 // ─── WEBSOCKET — AUTHENTICATED LIVE EVENTS ───────────────────────────────────
