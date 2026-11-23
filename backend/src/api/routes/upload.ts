@@ -36,9 +36,12 @@ router.post("/csv/:entity", authenticate, requireRole("COORDINATOR"), upload.sin
 // POST /api/upload/pdf
 router.post("/pdf", authenticate, requireRole("COORDINATOR"), upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+  if (!/\.pdf$/i.test(req.file.originalname) || (req.file.mimetype && req.file.mimetype !== "application/pdf")) {
+    return res.status(400).json({ error: "Only PDF files are accepted" });
+  }
 
   const jobRecord = await prisma.ingestionJob.create({
-    data: { type: "pdf-parse", status: "QUEUED", filename: req.file.originalname },
+    data: { type: "pdf-parse", status: "QUEUED", filename: req.file.originalname, createdById: req.user!.id },
   });
 
   await pdfParseQueue.add("parse", {

@@ -18,11 +18,16 @@ export async function startHarness(seedOpts?: SeedOpts) {
   testDbRef.db = await createTestDb();
   const prisma = testDbRef.db.prisma;
   const seed = await seedBasic(prisma, seedOpts);
+  process.env.UPLOAD_DIR ??= require("os").tmpdir() + "/samayak-test-uploads";
+  require("fs").mkdirSync(process.env.UPLOAD_DIR, { recursive: true });
   const { httpServer } = await import("../../src/api/server");
   await new Promise<void>((r) => httpServer.listen(0, r));
   const base = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
   const { startGenerationWorker } = await import("../../src/workers/generationWorker");
-  const worker = startGenerationWorker();
+  const genWorker = startGenerationWorker();
+  const { startPdfWorker } = await import("../../src/workers/pdfParser");
+  const pdfWorker = startPdfWorker();
+  const worker = { close: async () => { await genWorker.close(); await pdfWorker.close(); } };
   const tokenFor = (u: { id: number; email: string; role: string; departmentId: number }) =>
     jwt.sign({ sub: String(u.id), email: u.email, role: u.role, departmentId: u.departmentId }, process.env.JWT_SECRET!, { algorithm: "HS256" });
   const call = async (method: string, path: string, user: any, body?: unknown) => {

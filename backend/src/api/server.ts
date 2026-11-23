@@ -30,6 +30,7 @@ import analyticsRouter   from "./routes/analytics";
 import uploadRouter      from "./routes/upload";
 import generationsRouter from "./routes/generations";
 import academicRouter from "./routes/academic";
+import ingestionRouter from "./routes/ingestion";
 import scheduleAnalyticsRouter from "./routes/scheduleAnalytics";
 import { apiErrorHandler } from "../lib/httpError";
 
@@ -65,6 +66,7 @@ app.use("/api/timetable",    timetableRouter);
 app.use("/api/analytics/schedule", scheduleAnalyticsRouter);
 app.use("/api/analytics",    analyticsRouter);
 app.use("/api/upload",       uploadRouter);
+app.use("/api/ingestion",    ingestionRouter);
 app.use("/api/generations",  generationsRouter);
 app.use("/api",              academicRouter);
 app.use("/api", apiErrorHandler);
