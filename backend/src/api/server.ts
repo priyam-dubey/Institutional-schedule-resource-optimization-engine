@@ -30,6 +30,7 @@ import analyticsRouter   from "./routes/analytics";
 import uploadRouter      from "./routes/upload";
 import generationsRouter from "./routes/generations";
 import academicRouter from "./routes/academic";
+import scheduleAnalyticsRouter from "./routes/scheduleAnalytics";
 import { apiErrorHandler } from "../lib/httpError";
 
 const app = express();
@@ -61,6 +62,7 @@ app.use("/api/rooms",        roomsRouter);
 app.use("/api/courses",      coursesRouter);
 app.use("/api/users",        facultyRouter);
 app.use("/api/timetable",    timetableRouter);
+app.use("/api/analytics/schedule", scheduleAnalyticsRouter);
 app.use("/api/analytics",    analyticsRouter);
 app.use("/api/upload",       uploadRouter);
 app.use("/api/generations",  generationsRouter);
