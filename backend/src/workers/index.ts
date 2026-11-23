@@ -6,6 +6,7 @@
 import "./csvImport";
 import "./pdfParser";
 import "./analyticsWorker";
+import "./generationWorker";
 
 console.log("[Samayak Workers] All workers initialised and listening");
 

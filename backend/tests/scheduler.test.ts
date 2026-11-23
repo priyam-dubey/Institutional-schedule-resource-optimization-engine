@@ -385,3 +385,42 @@ describe("scheduler: randomised properties", () => {
     }
   });
 });
+
+describe("scheduler: equipment allow-list and progress hook", () => {
+  it("only uses allowed rooms and reports when none qualifies", () => {
+    const rooms = [room("plain"), room("projector"), room("projector2")];
+    const faculty = [fac("f")];
+    const r1 = req("x", ["S"], ["f"], { sessionsPerWeek: 4, allowedRoomIds: ["projector", "projector2"] });
+    const res = solveTimetable(input({ rooms, faculty, requirements: [r1] }));
+    expect(res.status).toBe("COMPLETE");
+    expect(res.assignments.every((a) => a.roomId !== "plain")).toBe(true);
+
+    const bad = solveTimetable(input({ rooms, faculty, requirements: [{ ...r1, allowedRoomIds: ["missing"] }] }));
+    expect(bad.status).toBe("INFEASIBLE");
+    expect(bad.unassigned[0].reasons.join(" ")).toMatch(/required equipment/);
+
+    // the independent validator also rejects an assignment into a non-allowed room
+    const v = validateAssignments(input({ rooms, faculty, requirements: [r1] }), [
+      { requirementId: "x", sessionIndex: 0, facultyId: "f", roomId: "plain", day: 0, startPeriod: 0, length: 1 },
+    ]);
+    expect(v.map((x) => x.type)).toContain("ROOM_TYPE_MISMATCH");
+  });
+
+  it("calls onProgress and does not change the result", () => {
+    const faculty = Array.from({ length: 6 }, (_, i) => fac(`f${i}`));
+    const requirements = Array.from({ length: 10 }, (_, i) => req(`r${i}`, [`S${i % 5}`], [`f${i % 6}`], { sessionsPerWeek: 4 }));
+    const inp = input({ rooms: [room("a"), room("b"), room("c")], faculty, requirements });
+    const events: string[] = [];
+    const withHook = solveTimetable(inp, { onProgress: (p) => events.push(p.phase) });
+    expect(events).toContain("local-search");
+    expect(strip(withHook)).toEqual(strip(solveTimetable(inp)));
+  });
+
+  it("partial completeness: only the listed requirements must be complete", () => {
+    const inp = input({ rooms: [room("r1"), room("r2")], faculty: [fac("f1"), fac("f2")], requirements: [req("a", ["A"], ["f1"], { sessionsPerWeek: 2 }), req("b", ["B"], ["f2"], { sessionsPerWeek: 2 })] });
+    const res = solveTimetable(inp);
+    const onlyA = res.assignments.filter((a) => a.requirementId === "a");
+    expect(validateAssignments(inp, onlyA, { requireComplete: new Set(["a"]) })).toEqual([]);
+    expect(validateAssignments(inp, onlyA, { requireComplete: true }).map((v) => v.requirementId)).toContain("b");
+  });
+});

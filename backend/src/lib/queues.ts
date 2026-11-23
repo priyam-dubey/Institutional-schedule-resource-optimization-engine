@@ -7,3 +7,5 @@ export const analyticsQueue = new Queue("analytics-recompute", { connection: con
 export type CsvImportJobData = { jobId: string; filePath: string; entity: "departments"|"rooms"|"courses"|"users" };
 export type PdfParseJobData  = { jobId: string; filePath: string; department?: string };
 export type AnalyticsJobData = { trigger: "mutation"|"ingestion-complete"; entityType?: string };
+export const generationQueue = new Queue("timetable-generation", { connection: conn });
+export type GenerationJobData = { generationId: number };

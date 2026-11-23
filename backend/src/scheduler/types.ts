@@ -64,6 +64,11 @@ export interface SchedRequirement {
   blockLength: number;
   /** Room types this requirement may use. */
   roomTypes: RoomType[];
+  /**
+   * Optional allow-list of room ids (e.g. rooms that have the required equipment).
+   * When set, only these rooms are candidates, in addition to the type/capacity rules.
+   */
+  allowedRoomIds?: string[];
 }
 
 export interface SoftWeights {
@@ -190,6 +195,19 @@ export interface SchedulerResult {
     localSearchImprovements: number;
     stoppedBy: "complete" | "backtrack-budget" | "time-limit";
   };
+}
+
+export interface SolveProgress {
+  phase: "search" | "greedy" | "local-search";
+  placed: number;
+  total: number;
+  nodes: number;
+  backtracks: number;
+}
+
+export interface SolveHooks {
+  /** Called periodically (every few hundred search nodes and once per later phase). Must be cheap. */
+  onProgress?: (p: SolveProgress) => void;
 }
 
 export const DEFAULT_WEIGHTS: SoftWeights = {

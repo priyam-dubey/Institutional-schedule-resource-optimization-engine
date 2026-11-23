@@ -17,6 +17,8 @@
     "prisma:seed":    "ts-node --transpile-only prisma/seed.ts",
     "prisma:studio":  "prisma studio",
     "test":           "vitest run",
+    "test:unit":        "vitest run tests/*.test.ts",
+    "test:integration": "vitest run tests/integration",
     "typecheck":      "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

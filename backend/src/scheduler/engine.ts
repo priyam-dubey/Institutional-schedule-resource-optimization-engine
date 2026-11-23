@@ -35,6 +35,7 @@ import {
   type SchedulerInput,
   type SchedulerResult,
   type SoftWeights,
+  type SolveHooks,
   type UnassignedSession,
 } from "./types";
 import { validateAssignments } from "./validator";
@@ -78,7 +79,7 @@ export function scoreFromPenalty(total: number, sessions: number): number {
   return Math.max(0, Math.round((100 - (100 * total) / (sessions * 10)) * 10) / 10);
 }
 
-export function solveTimetable(input: SchedulerInput): SchedulerResult {
+export function solveTimetable(input: SchedulerInput, hooks: SolveHooks = {}): SchedulerResult {
   const t0 = Date.now();
   const cfg = input.config ?? {};
   const weights: SoftWeights = { ...DEFAULT_WEIGHTS, ...(cfg.weights ?? {}) };
@@ -140,7 +141,9 @@ export function solveTimetable(input: SchedulerInput): SchedulerResult {
   input.requirements.forEach((req, reqIdx) => {
     const facultyCands = req.facultyIds.map((id) => fIdx.get(id)).filter((x): x is number => x !== undefined);
     const roomCands: number[] = [];
+    const allowed = req.allowedRoomIds ? new Set(req.allowedRoomIds) : null;
     input.rooms.forEach((room, ri) => {
+      if (allowed && !allowed.has(room.id)) return;
       if (req.roomTypes.includes(room.type) && room.capacity >= req.strength) roomCands.push(ri);
     });
     for (let k = 0; k < req.sessionsPerWeek; k++) {
@@ -406,6 +409,7 @@ export function solveTimetable(input: SchedulerInput): SchedulerResult {
   function dfs(deadline: number, btBudget: number, btStart: number, rng: SeededRng | null): boolean {
     if (placedCount >= target) return true;
     nodes++;
+    if ((nodes & 255) === 0 && hooks.onProgress) hooks.onProgress({ phase: "search", placed: placedCount, total: N, nodes, backtracks });
     if ((nodes & 63) === 0 && Date.now() > deadline) {
       stoppedBy = "time-limit";
       return false;
@@ -467,6 +471,7 @@ export function solveTimetable(input: SchedulerInput): SchedulerResult {
     if (best.count > 0) {
       for (const [i, pl] of best.placements.entries()) if (pl) place(sessions[i], pl);
     }
+    hooks.onProgress?.({ phase: "greedy", placed: placedCount, total: N, nodes, backtracks });
     greedyComplete();
     if (stoppedBy === "complete") stoppedBy = "backtrack-budget";
   } else {
@@ -489,6 +494,7 @@ export function solveTimetable(input: SchedulerInput): SchedulerResult {
   // ── local search (soft-cost hill climbing; hard constraints untouched) ────
   let improvements = 0;
   if (placedCount > 0 && lsPasses > 0) {
+    hooks.onProgress?.({ phase: "local-search", placed: placedCount, total: N, nodes, backtracks });
     const active = new Set<number>();
     for (const s of sessions) for (const f of s.facultyCands) active.add(f);
     const activeCount = Math.max(1, active.size);
@@ -565,7 +571,7 @@ export function solveTimetable(input: SchedulerInput): SchedulerResult {
     if (req.facultyIds.length === 0) why.push("No faculty is assigned/qualified for this subject");
     else if (s.facultyCands.length === 0) why.push("None of the listed faculty exist in the faculty set");
     if (s.roomCands.length === 0)
-      why.push(`No ${req.roomTypes.join("/")} room with capacity >= ${req.strength}`);
+      why.push(`No ${req.roomTypes.join("/")} room with capacity >= ${req.strength}${req.allowedRoomIds ? " and the required equipment" : ""}`);
     if (s.staticPositions.length === 0)
       why.push(`A block of ${s.L} consecutive periods does not fit anywhere in the week (breaks split the day)`);
     if (why.length > 0) return why;
@@ -749,7 +755,10 @@ export function preflightProofs(input: SchedulerInput): InfeasibilityProof[] {
     const label = req.label ?? req.id;
     if (req.facultyIds.length === 0 || !req.facultyIds.some((id) => facById.has(id)))
       out.push({ kind: "NO_FACULTY", message: `${label}: no qualified faculty available` });
-    const rooms = input.rooms.filter((r) => req.roomTypes.includes(r.type) && r.capacity >= req.strength);
+    const allowedSet = req.allowedRoomIds ? new Set(req.allowedRoomIds) : null;
+    const rooms = input.rooms.filter(
+      (r) => req.roomTypes.includes(r.type) && r.capacity >= req.strength && (!allowedSet || allowedSet.has(r.id)),
+    );
     if (rooms.length === 0)
       out.push({ kind: "NO_ROOM", message: `${label}: no ${req.roomTypes.join("/")} room holds ${req.strength} students` });
   }

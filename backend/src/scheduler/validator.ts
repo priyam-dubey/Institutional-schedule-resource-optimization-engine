@@ -11,7 +11,7 @@ import type { Assignment, SchedulerInput, Violation } from "./types";
 export function validateAssignments(
   input: SchedulerInput,
   assignments: Assignment[],
-  opts: { requireComplete?: boolean } = {},
+  opts: { requireComplete?: boolean | ReadonlySet<string> } = {},
 ): Violation[] {
   const out: Violation[] = [];
   const D = input.days.length;
@@ -87,6 +87,9 @@ export function validateAssignments(
     if (!req.roomTypes.includes(room.type)) {
       out.push({ type: "ROOM_TYPE_MISMATCH", message: `Room ${room.id} (${room.type}) not allowed for ${req.id}`, requirementId: req.id, roomId: room.id });
     }
+    if (req.allowedRoomIds && !req.allowedRoomIds.includes(room.id)) {
+      out.push({ type: "ROOM_TYPE_MISMATCH", message: `Room ${room.id} lacks the equipment required by ${req.id}`, requirementId: req.id, roomId: room.id });
+    }
     if (room.capacity < req.strength) {
       out.push({ type: "ROOM_CAPACITY", message: `Room ${room.id} capacity ${room.capacity} < strength ${req.strength} for ${req.id}`, requirementId: req.id, roomId: room.id });
     }
@@ -155,7 +158,10 @@ export function validateAssignments(
   }
 
   if (opts.requireComplete) {
+    // `true` = every requirement must be complete; a Set = only those requirement ids.
+    const only = opts.requireComplete === true ? null : opts.requireComplete;
     for (const req of input.requirements) {
+      if (only && !only.has(req.id)) continue;
       const got = perReq.get(req.id)?.size ?? 0;
       if (got !== req.sessionsPerWeek) {
         out.push({ type: "SESSION_COUNT_UNMET", message: `Requirement ${req.id} has ${got}/${req.sessionsPerWeek} sessions`, requirementId: req.id });

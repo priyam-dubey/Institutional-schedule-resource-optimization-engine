@@ -28,6 +28,8 @@ import facultyRouter     from "./routes/faculty";
 import timetableRouter   from "./routes/timetable";
 import analyticsRouter   from "./routes/analytics";
 import uploadRouter      from "./routes/upload";
+import generationsRouter from "./routes/generations";
+import { apiErrorHandler } from "../lib/httpError";
 
 const app = express();
 const httpServer = createServer(app);
@@ -60,6 +62,8 @@ app.use("/api/users",        facultyRouter);
 app.use("/api/timetable",    timetableRouter);
 app.use("/api/analytics",    analyticsRouter);
 app.use("/api/upload",       uploadRouter);
+app.use("/api/generations",  generationsRouter);
+app.use("/api", apiErrorHandler);
 
 // ─── WEBSOCKET — AUTHENTICATED LIVE EVENTS ───────────────────────────────────
 // Clients connect to /ws?token=<JWT>. The upgrade is rejected (401) unless the
@@ -130,8 +134,12 @@ app.use((err: Error, req: express.Request, res: express.Response, _next: express
 
 // ─── BOOT ─────────────────────────────────────────────────────────────────────
 const PORT = Number(process.env.PORT ?? 4000);
-httpServer.listen(PORT, () => {
-  console.log("[Samayak API] HTTP + WebSocket listening on port " + PORT);
-});
+// Tests import this module and start their own listener on an ephemeral port.
+if (process.env.NODE_ENV !== "test") {
+  httpServer.listen(PORT, () => {
+    console.log("[Samayak API] HTTP + WebSocket listening on port " + PORT);
+  });
+}
 
+export { httpServer };
 export default app;
