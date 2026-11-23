@@ -11,6 +11,7 @@ import path from "path";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { prisma } from "../lib/prisma";
+import { resolveInstitutionId } from "../lib/institution";
 import { getRedis } from "../lib/redis";
 import { analyticsQueue } from "../lib/queues";
 import type { CsvImportJobData } from "../lib/queues";
@@ -49,7 +50,7 @@ async function importDepartments(rows: ParsedRow[]): Promise<ImportResult> {
     try {
       await prisma.department.upsert({
         where: { code: row.code.toUpperCase() },
-        create: { name: row.name.trim(), code: row.code.toUpperCase().trim() },
+        create: { name: row.name.trim(), code: row.code.toUpperCase().trim(), institutionId: await resolveInstitutionId() },
         update: { name: row.name.trim() },
       });
       result.created++;

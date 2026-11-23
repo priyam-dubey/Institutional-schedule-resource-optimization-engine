@@ -39,6 +39,7 @@ enum DayOfWeek {
   THURSDAY
   FRIDAY
   SATURDAY
+  SUNDAY
 }
 
 enum Period {
@@ -57,6 +58,46 @@ enum JobStatus {
   PROCESSING
   DONE
   FAILED
+  AWAITING_REVIEW // PDF extraction finished; a human must review before anything is persisted
+  CANCELLED
+}
+
+enum GenerationStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+/// Outcome reported by the scheduling engine (see backend/src/scheduler/types.ts).
+enum SolveStatus {
+  COMPLETE
+  PARTIAL
+  INFEASIBLE
+  INVALID
+}
+
+enum PublishStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum GenerationSource {
+  GENERATED
+  IMPORTED // created from a reviewed PDF ingestion
+}
+
+enum ConflictKind {
+  HARD // a hard-constraint violation in the stored entries
+  UNASSIGNED // a required session that could not be placed
+  INFEASIBLE // a counting-argument proof that a full timetable cannot exist
+}
+
+enum AvailabilityKind {
+  UNAVAILABLE
+  PREFERRED
 }
 
 // ─── DEPARTMENT ───────────────────────────────────────────────────────────────
@@ -68,29 +109,40 @@ model Department {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  institutionId Int
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+
   branches Branch[]
   rooms    Room[]
   users    User[]
+  programs Program[]
+  subjects Subject[]
 
   @@index([name])
   @@index([code])
+  @@index([institutionId])
   @@map("departments")
 }
 
 // ─── BRANCH ───────────────────────────────────────────────────────────────────
 
 model Branch {
-  id           Int        @id @default(autoincrement())
-  name         String     @db.VarChar(200)
-  code         String     @db.VarChar(20)
+  id           Int      @id @default(autoincrement())
+  name         String   @db.VarChar(200)
+  code         String   @db.VarChar(20)
   departmentId Int
-  createdAt    DateTime   @default(now())
+  createdAt    DateTime @default(now())
+
+  /// Compatibility: every legacy Branch is backfilled to a Program (see migration 20261123000000).
+  programId Int?
+  program   Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
 
   department Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
   courses    Course[]
 
   @@unique([code, departmentId])
   @@index([departmentId])
+  @@index([programId])
   @@map("branches")
 }
 
@@ -102,11 +154,17 @@ model Room {
   departmentId Int
   capacity     Int?
   type         RoomType @default(CLASSROOM)
+  building     String?  @db.VarChar(100)
+  /// Equipment tags, e.g. ["projector","linux-pcs"]. Matched against Subject.requiredEquipment.
+  equipment    String[] @default([])
+  isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  department Department      @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  slots      TimetableSlot[]
+  department   Department         @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  slots        TimetableSlot[]
+  availability RoomAvailability[]
+  entries      TimetableEntry[]
 
   // Composite unique: same room number can exist in different departments
   @@unique([roomNumber, departmentId])
@@ -121,7 +179,7 @@ model Course {
   id       Int        @id @default(autoincrement())
   code     String     @db.VarChar(20)
   name     String     @db.VarChar(300)
-  credits  Decimal    @db.Decimal(4, 1)  // supports NC=0, 1.5, 2, 3, 4
+  credits  Decimal    @db.Decimal(4, 1) // supports NC=0, 1.5, 2, 3, 4
   type     CourseType
   branchId Int
   semester Int        @db.SmallInt
@@ -129,10 +187,15 @@ model Course {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// Compatibility: every legacy Course is backfilled to a Subject (see migration 20261123000000).
+  subjectId Int?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+
   branch Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
   slots  TimetableSlot[]
 
   @@unique([code, branchId, semester])
+  @@index([subjectId])
   @@index([branchId])
   @@index([semester])
   @@index([code])
@@ -142,19 +205,20 @@ model Course {
 // ─── USER / FACULTY ───────────────────────────────────────────────────────────
 
 model User {
-  id           Int      @id @default(autoincrement())
-  name         String   @db.VarChar(200)
-  email        String   @unique @db.VarChar(320)
+  id           Int       @id @default(autoincrement())
+  name         String    @db.VarChar(200)
+  email        String    @unique @db.VarChar(320)
   passwordHash String    @db.VarChar(72)
-  role         Role     @default(PROFESSOR)
+  role         Role      @default(PROFESSOR)
   departmentId Int
-  isDeleted    Boolean  @default(false)
+  isDeleted    Boolean   @default(false)
   deletedAt    DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  department Department      @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  slots      TimetableSlot[]
+  department     Department      @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  slots          TimetableSlot[]
+  facultyProfile FacultyProfile?
 
   @@index([email])
   @@index([departmentId])
@@ -205,7 +269,382 @@ model IngestionJob {
   createdAt   DateTime  @default(now())
   completedAt DateTime?
 
+  /// PDF review workflow: extracted rows wait here (editable) until a human commits them.
+  payload               Json?
+  progress              Int       @default(0)
+  semesterId            Int?
+  createdById           Int?
+  reviewedAt            DateTime?
+  committedGenerationId Int?
+
   @@index([status])
   @@index([type])
+  @@index([semesterId])
   @@map("ingestion_jobs")
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ACADEMIC MODEL (additive — introduced in migration 20261123000000_academic_model)
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─── INSTITUTION / ACADEMIC CALENDAR ─────────────────────────────────────────
+
+model Institution {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(300)
+  code      String   @unique @db.VarChar(30)
+  timezone  String   @default("Asia/Kolkata") @db.VarChar(64)
+  address   String?  @db.VarChar(500)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  departments   Department[]
+  academicYears AcademicYear[]
+
+  @@map("institutions")
+}
+
+model AcademicYear {
+  id            Int      @id @default(autoincrement())
+  institutionId Int
+  label         String   @db.VarChar(20) // "2026-27"
+  startDate     DateTime @db.Date
+  endDate       DateTime @db.Date
+  isCurrent     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  semesters   Semester[]
+
+  @@unique([institutionId, label])
+  @@index([institutionId])
+  @@map("academic_years")
+}
+
+/// A teaching term. Owns the weekly grid: working days, periods (incl. breaks) and holidays.
+model Semester {
+  id             Int         @id @default(autoincrement())
+  academicYearId Int
+  name           String      @db.VarChar(100) // "Odd Semester"
+  startDate      DateTime    @db.Date
+  endDate        DateTime    @db.Date
+  workingDays    DayOfWeek[] @default([MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY])
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  academicYear        AcademicYear          @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
+  periods             SemesterPeriod[]
+  holidays            Holiday[]
+  sections            Section[]
+  generations         TimetableGeneration[]
+  facultyAvailability FacultyAvailability[]
+  roomAvailability    RoomAvailability[]
+
+  @@unique([academicYearId, name])
+  @@index([academicYearId])
+  @@map("semesters")
+}
+
+/// One row of the daily bell schedule. `index` is the zero-based position used by the engine.
+model SemesterPeriod {
+  id         Int     @id @default(autoincrement())
+  semesterId Int
+  index      Int     @db.SmallInt
+  label      String  @db.VarChar(30)
+  startTime  String  @db.VarChar(5) // "09:00"
+  endTime    String  @db.VarChar(5) // "09:50"
+  isBreak    Boolean @default(false)
+
+  semester Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@unique([semesterId, index])
+  @@map("semester_periods")
+}
+
+model Holiday {
+  id         Int      @id @default(autoincrement())
+  semesterId Int
+  date       DateTime @db.Date
+  name       String   @db.VarChar(200)
+
+  semester Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@unique([semesterId, date])
+  @@map("holidays")
+}
+
+// ─── PROGRAM / SUBJECT / SECTION ─────────────────────────────────────────────
+
+model Program {
+  id            Int      @id @default(autoincrement())
+  departmentId  Int
+  code          String   @db.VarChar(20)
+  name          String   @db.VarChar(200)
+  level         String?  @db.VarChar(30) // UG / PG / Diploma
+  durationYears Int      @default(4) @db.SmallInt
+  createdAt     DateTime @default(now())
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  branches   Branch[]
+  sections   Section[]
+
+  @@unique([departmentId, code])
+  @@index([departmentId])
+  @@map("programs")
+}
+
+model Subject {
+  id                     Int        @id @default(autoincrement())
+  departmentId           Int
+  code                   String     @db.VarChar(20)
+  name                   String     @db.VarChar(300)
+  credits                Decimal    @db.Decimal(4, 1)
+  type                   CourseType
+  /// Defaults pre-filled into new SubjectRequirements.
+  defaultSessionsPerWeek Int        @default(3) @db.SmallInt
+  defaultBlockLength     Int        @default(1) @db.SmallInt
+  requiredRoomType       RoomType   @default(CLASSROOM)
+  requiredEquipment      String[]   @default([])
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+
+  department   Department           @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  courses      Course[]
+  qualified    FacultySubject[]
+  requirements SubjectRequirement[]
+  entries      TimetableEntry[]
+
+  @@unique([departmentId, code])
+  @@index([departmentId])
+  @@map("subjects")
+}
+
+model Section {
+  id          Int      @id @default(autoincrement())
+  programId   Int
+  semesterId  Int
+  yearOfStudy Int      @db.SmallInt
+  name        String   @db.VarChar(20) // "A"
+  strength    Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  program      Program              @relation(fields: [programId], references: [id], onDelete: Restrict)
+  semester     Semester             @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  batches      SectionBatch[]
+  requirements SubjectRequirement[]
+  entries      TimetableEntry[]
+
+  @@unique([programId, semesterId, yearOfStudy, name])
+  @@index([semesterId])
+  @@index([programId])
+  @@map("sections")
+}
+
+/// A lab/tutorial batch inside a section. A section with no batches is scheduled as one group.
+model SectionBatch {
+  id        Int    @id @default(autoincrement())
+  sectionId Int
+  name      String @db.VarChar(20) // "B1"
+  strength  Int
+
+  section      Section              @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  requirements SubjectRequirement[]
+  entries      TimetableEntry[]
+
+  @@unique([sectionId, name])
+  @@map("section_batches")
+}
+
+// ─── FACULTY ─────────────────────────────────────────────────────────────────
+
+model FacultyProfile {
+  id                Int      @id @default(autoincrement())
+  userId            Int      @unique
+  employeeCode      String?  @unique @db.VarChar(30)
+  designation       String?  @db.VarChar(100)
+  maxPeriodsPerWeek Int      @default(20) @db.SmallInt
+  maxConsecutive    Int      @default(3) @db.SmallInt
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user           User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  qualifications FacultySubject[]
+  availability   FacultyAvailability[]
+  requirements   SubjectRequirement[]
+  entries        TimetableEntry[]
+
+  @@map("faculty_profiles")
+}
+
+model FacultySubject {
+  id               Int @id @default(autoincrement())
+  facultyProfileId Int
+  subjectId        Int
+
+  faculty FacultyProfile @relation(fields: [facultyProfileId], references: [id], onDelete: Cascade)
+  subject Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([facultyProfileId, subjectId])
+  @@index([subjectId])
+  @@map("faculty_subjects")
+}
+
+model FacultyAvailability {
+  id               Int              @id @default(autoincrement())
+  facultyProfileId Int
+  semesterId       Int
+  day              DayOfWeek
+  periodIndex      Int              @db.SmallInt
+  kind             AvailabilityKind
+
+  faculty  FacultyProfile @relation(fields: [facultyProfileId], references: [id], onDelete: Cascade)
+  semester Semester       @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@unique([facultyProfileId, semesterId, day, periodIndex], map: "faculty_availability_slot_key")
+  @@index([semesterId])
+  @@map("faculty_availability")
+}
+
+model RoomAvailability {
+  id          Int       @id @default(autoincrement())
+  roomId      Int
+  semesterId  Int
+  day         DayOfWeek
+  periodIndex Int       @db.SmallInt
+
+  room     Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  semester Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, semesterId, day, periodIndex])
+  @@index([semesterId])
+  @@map("room_availability")
+}
+
+// ─── REQUIREMENTS ────────────────────────────────────────────────────────────
+
+/// "Section X (optionally batch Y) needs Subject Z, N sessions a week, each `blockLength` periods."
+/// (sectionId, batchId, subjectId) is unique in the service layer: batchId is nullable and
+/// PostgreSQL treats NULLs as distinct in unique indexes.
+model SubjectRequirement {
+  id                Int      @id @default(autoincrement())
+  sectionId         Int
+  batchId           Int?
+  subjectId         Int
+  /// Pins the teacher. When null, every faculty member qualified for the subject is a candidate.
+  assignedFacultyId Int?
+  sessionsPerWeek   Int      @db.SmallInt
+  blockLength       Int      @default(1) @db.SmallInt
+  roomType          RoomType @default(CLASSROOM)
+  requiredEquipment String[] @default([])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  section         Section          @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  batch           SectionBatch?    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  subject         Subject          @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  assignedFaculty FacultyProfile?  @relation(fields: [assignedFacultyId], references: [id], onDelete: SetNull)
+  entries         TimetableEntry[]
+
+  @@index([sectionId])
+  @@index([subjectId])
+  @@index([batchId])
+  @@map("subject_requirements")
+}
+
+// ─── TIMETABLE GENERATION ────────────────────────────────────────────────────
+
+model TimetableGeneration {
+  id               Int              @id @default(autoincrement())
+  semesterId       Int
+  /// Per-semester sequence: 1, 2, 3 … (see unique constraint)
+  version          Int
+  name             String?          @db.VarChar(200)
+  source           GenerationSource @default(GENERATED)
+  status           GenerationStatus @default(QUEUED)
+  solveStatus      SolveStatus?
+  publishStatus    PublishStatus    @default(DRAFT)
+  sectionIds       Int[]
+  config           Json
+  jobId            String?          @db.VarChar(100)
+  progress         Int              @default(0) @db.SmallInt
+  progressMessage  String?          @db.VarChar(300)
+  score            Float?
+  totalSessions    Int?
+  assignedSessions Int?
+  penalties        Json?
+  stats            Json?
+  durationMs       Int?
+  errorMessage     String?
+  createdById      Int
+  publishedById    Int?
+  publishedAt      DateTime?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  semester  Semester             @relation(fields: [semesterId], references: [id], onDelete: Restrict)
+  entries   TimetableEntry[]
+  conflicts GenerationConflict[]
+
+  @@unique([semesterId, version])
+  @@index([semesterId, publishStatus])
+  @@index([status])
+  @@map("timetable_generations")
+}
+
+/// One placed session (a block of `length` consecutive periods). Section/subject are
+/// snapshotted so a generation stays readable if a requirement is later edited or deleted.
+model TimetableEntry {
+  id               Int       @id @default(autoincrement())
+  generationId     Int
+  requirementId    Int?
+  sessionIndex     Int       @db.SmallInt
+  sectionId        Int
+  batchId          Int?
+  subjectId        Int
+  facultyProfileId Int
+  roomId           Int
+  day              DayOfWeek
+  startPeriod      Int       @db.SmallInt
+  length           Int       @default(1) @db.SmallInt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  generation  TimetableGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  requirement SubjectRequirement? @relation(fields: [requirementId], references: [id], onDelete: SetNull)
+  section     Section             @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  batch       SectionBatch?       @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  subject     Subject             @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  faculty     FacultyProfile      @relation(fields: [facultyProfileId], references: [id], onDelete: Restrict)
+  room        Room                @relation(fields: [roomId], references: [id], onDelete: Restrict)
+
+  @@unique([generationId, requirementId, sessionIndex])
+  @@index([generationId, day, startPeriod])
+  @@index([roomId])
+  @@index([facultyProfileId])
+  @@index([sectionId])
+  @@map("timetable_entries")
+}
+
+model GenerationConflict {
+  id               Int          @id @default(autoincrement())
+  generationId     Int
+  kind             ConflictKind
+  code             String       @db.VarChar(50)
+  message          String
+  requirementId    Int?
+  sectionId        Int?
+  facultyProfileId Int?
+  roomId           Int?
+  day              DayOfWeek?
+  periodIndex      Int?         @db.SmallInt
+  details          Json?
+  createdAt        DateTime     @default(now())
+
+  generation TimetableGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+
+  @@index([generationId, kind])
+  @@map("generation_conflicts")
 }

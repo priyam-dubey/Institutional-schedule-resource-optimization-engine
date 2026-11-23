@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../../lib/prisma";
+import { resolveInstitutionId } from "../../lib/institution";
 import { authenticate, requireRole, requireDepartmentAccess } from "../../middleware/rbac";
 import { analyticsQueue } from "../../lib/queues";
 import { z } from "zod";
@@ -34,7 +35,8 @@ router.post("/", authenticate, requireRole("DEAN"), async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.issues, correlationId: req.correlationId });
 
   try {
-    const dept = await prisma.department.create({ data: parsed.data });
+    const institutionId = await resolveInstitutionId(req.user!.departmentId);
+    const dept = await prisma.department.create({ data: { ...parsed.data, institutionId } });
     await analyticsQueue.add("recompute", { trigger: "mutation", entityType: "departments" });
     res.status(201).json(dept);
   } catch (e: any) {
