@@ -8,6 +8,13 @@ import { useEffect } from 'react';
 import AppLayout         from './components/layout/AppLayout';
 import LoginPage         from './components/pages/LoginPage';
 import DashboardPage     from './components/pages/DashboardPage';
+import ScheduleDashboardPage from './components/pages/ScheduleDashboardPage';
+import SetupPage from './components/pages/SetupPage';
+import AcademicStructurePage from './components/pages/AcademicStructurePage';
+import SectionsPage from './components/pages/SectionsPage';
+import AvailabilityPage from './components/pages/AvailabilityPage';
+import GenerationPage from './components/pages/GenerationPage';
+import TimetableViewerPage from './components/pages/TimetableViewerPage';
 import DepartmentsPage   from './components/pages/DepartmentsPage';
 import RoomsPage         from './components/pages/RoomsPage';
 import CoursesPage       from './components/pages/CoursesPage';
@@ -60,7 +67,14 @@ export default function App() {
             </ProtectedRoute>
           }>
             <Route index element={<Navigate to="/dashboard" replace />} />
-            <Route path="dashboard"    element={<DashboardPage />} />
+            <Route path="dashboard"    element={<ScheduleDashboardPage />} />
+            <Route path="legacy-dashboard" element={<DashboardPage />} />
+            <Route path="setup"        element={<RequireRole min="HOD"><SetupPage /></RequireRole>} />
+            <Route path="academics"    element={<RequireRole min="HOD"><AcademicStructurePage /></RequireRole>} />
+            <Route path="sections"     element={<RequireRole min="HOD"><SectionsPage /></RequireRole>} />
+            <Route path="availability" element={<AvailabilityPage />} />
+            <Route path="generate"     element={<RequireRole min="HOD"><GenerationPage /></RequireRole>} />
+            <Route path="timetables/:id" element={<TimetableViewerPage />} />
             <Route path="health"       element={<RequireRole min="ADMIN"><HealthPage /></RequireRole>} />
             <Route path="departments"  element={<DepartmentsPage />} />
             <Route path="rooms"        element={<RoomsPage />} />

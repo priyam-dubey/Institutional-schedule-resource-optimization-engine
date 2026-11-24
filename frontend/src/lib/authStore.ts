@@ -39,3 +39,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
   isAuthenticated: () => !!get().token && !!get().user,
 }));
+
+/** True when the signed-in user's role is at least `min` (UI affordance only; the API enforces roles). */
+export function useCan(min: Role): boolean {
+  const role = useAuthStore((s) => s.user?.role);
+  return !!role && ROLE_LEVEL[role] >= ROLE_LEVEL[min];
+}

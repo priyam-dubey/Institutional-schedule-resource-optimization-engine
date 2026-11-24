@@ -2,12 +2,13 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import {
   LayoutDashboard, Building2, DoorOpen, BookOpen, Users,
-  CalendarDays, FileText, Upload, Activity, LogOut, Bell, RefreshCw
+  CalendarDays, FileText, Upload, Activity, LogOut, Bell, RefreshCw, Settings, GraduationCap, Layers, Clock, Wand2
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore, ROLE_LEVEL, type Role } from '../../lib/authStore';
 import { clsx } from 'clsx';
 import { RoleBadge } from '../ui';
+import { useScheduleLiveUpdates } from '../../lib/scheduling';
 
 interface NavItem { to: string; icon: LucideIcon; label: string; live?: boolean; minRole?: Role }
 interface NavSection { section: string; items: NavItem[] }
@@ -17,6 +18,15 @@ const NAV_ITEMS: NavSection[] = [
     items: [
       { to: '/dashboard',    icon: LayoutDashboard, label: 'Dashboard',   live: true },
       { to: '/health',       icon: Activity,        label: 'System Health', minRole: 'ADMIN' },
+    ]
+  },
+  { section: 'Scheduling Setup',
+    items: [
+      { to: '/setup',        icon: Settings,      label: 'Institution & Calendar', minRole: 'HOD' },
+      { to: '/academics',    icon: GraduationCap, label: 'Programs & Subjects',    minRole: 'HOD' },
+      { to: '/sections',     icon: Layers,        label: 'Sections & Requirements', minRole: 'HOD' },
+      { to: '/availability', icon: Clock,         label: 'Availability & Equipment' },
+      { to: '/generate',     icon: Wand2,         label: 'Generate Timetable',     minRole: 'HOD' },
     ]
   },
   { section: 'Academic Data',
@@ -29,7 +39,8 @@ const NAV_ITEMS: NavSection[] = [
   },
   { section: 'Operations',
     items: [
-      { to: '/timetable',     icon: CalendarDays, label: 'Timetable' },
+      { to: '/timetable',     icon: CalendarDays, label: 'Legacy Slots' },
+      { to: '/legacy-dashboard', icon: Activity,  label: 'Legacy Slot Analytics' },
       { to: '/pdf-ingestion', icon: FileText,     label: 'PDF Ingestion', minRole: 'COORDINATOR' },
       { to: '/bulk-import',   icon: Upload,       label: 'Bulk Import',   minRole: 'COORDINATOR' },
     ]
@@ -38,6 +49,7 @@ const NAV_ITEMS: NavSection[] = [
 
 export default function AppLayout() {
   const { user, logout } = useAuthStore();
+  useScheduleLiveUpdates();
   const navigate = useNavigate();
   const [corrId] = useState(() => Math.random().toString(36).substr(2, 8));
 

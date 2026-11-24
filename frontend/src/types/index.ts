@@ -3,7 +3,7 @@ export type RoomType = 'CLASSROOM' | 'LAB' | 'OTHER';
 export type CourseType = 'LECTURE' | 'LAB' | 'TUTORIAL';
 export type DayOfWeek = 'MONDAY' | 'TUESDAY' | 'WEDNESDAY' | 'THURSDAY' | 'FRIDAY' | 'SATURDAY';
 export type Period = 'I' | 'II' | 'III' | 'IV' | 'V' | 'VII' | 'VIII' | 'IX';
-export type JobStatus = 'QUEUED' | 'PROCESSING' | 'DONE' | 'FAILED';
+export type JobStatus = 'QUEUED' | 'PROCESSING' | 'DONE' | 'FAILED' | 'AWAITING_REVIEW' | 'CANCELLED';
 
 export interface Department {
   id: number; name: string; code: string; createdAt: string; updatedAt: string;

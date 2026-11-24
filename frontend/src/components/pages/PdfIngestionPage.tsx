@@ -1,201 +1,130 @@
-import { useState, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
-import { useMutation } from '@tanstack/react-query';
-import { api } from '../../lib/api';
-import { useJobPoller } from '../../hooks/useJobPoller';
-import { PageHeader, Card, Button, Badge } from '../ui';
-import { Upload, FileText, CheckCircle, AlertTriangle, Loader2 } from 'lucide-react';
-import { clsx } from 'clsx';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Upload, Trash2, Plus, ShieldCheck, Save, CheckCheck, X } from 'lucide-react';
 import toast from 'react-hot-toast';
-import type { JobStatus } from '../../types';
+import { api } from '../../lib/api';
+import { ALL_DAYS, errData, errMsg, useApiMutation, useCurrentSemester, useFacultyProfiles, useSections, type Day, type Semester } from '../../lib/scheduling';
+import SemesterPicker from '../common/SemesterPicker';
+import { Badge, Button, Card, EmptyState, PageHeader, Select, ProgressBar } from '../ui';
 
-const STEPS = [
-  { key: 'QUEUED',      label: 'Queued',      icon: FileText },
-  { key: 'PROCESSING',  label: 'Parsing',     icon: Loader2 },
-  { key: 'PROCESSING2', label: 'Integrating', icon: Loader2 },
-  { key: 'DONE',        label: 'Done',        icon: CheckCircle },
-] as const;
-
-function stepIndex(status: JobStatus | undefined) {
-  if (!status || status === 'QUEUED') return 0;
-  if (status === 'PROCESSING') return 1;
-  if (status === 'DONE') return 3;
-  if (status === 'FAILED') return -1;
-  return 0;
-}
+interface Row { id: string; day: Day; periodLabel: string; raw: string; subjectCode: string; roomNumber: string | null; batchName: string | null; facultyProfileId: number | null; length: number; matched?: boolean }
+interface Issue { rowId: string | null; severity: 'error' | 'warning'; code: string; message: string }
+interface Job { id: string; status: string; filename: string | null; progress: number; totalRows: number | null; payload: { meta: Record<string, string>; rows: Row[]; warnings?: string[] } | null; errorLog: { reason: string }[] | null; committedGenerationId: number | null }
 
 export default function PdfIngestionPage() {
+  const qc = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
-  const { data: job } = useJobPoller(jobId);
+  const [uploading, setUploading] = useState(false);
 
-  const uploadMutation = useMutation({
-    mutationFn: (file: File) => {
-      const fd = new FormData();
-      fd.append('file', file);
-      return api.post('/upload/pdf', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-    },
-    onSuccess: ({ data }) => {
-      setJobId(data.jobId);
-      toast.success('PDF queued for processing (Job ' + data.jobId.slice(0, 8) + '…)');
-    },
-    onError: (err: any) => toast.error(err.response?.data?.error ?? 'Upload failed'),
-  });
+  const onDrop = useCallback(async (files: File[]) => {
+    if (!files[0]) return;
+    const fd = new FormData(); fd.append('file', files[0]);
+    setUploading(true);
+    try {
+      const r = await api.post('/upload/pdf', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setJobId(r.data.jobId); toast.success('PDF uploaded — extracting');
+    } catch (e) { toast.error(errMsg(e)); } finally { setUploading(false); }
+    qc.invalidateQueries({ queryKey: ['ingestion'] });
+  }, [qc]);
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept: { 'application/pdf': ['.pdf'] }, maxFiles: 1, maxSize: 10 * 1024 * 1024, disabled: uploading });
 
-  const onDrop = useCallback((accepted: File[]) => {
-    if (accepted[0]) uploadMutation.mutate(accepted[0]);
-  }, [uploadMutation]);
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: { 'application/pdf': ['.pdf'] },
-    maxFiles: 1,
-    maxSize: 10 * 1024 * 1024,
-  });
-
-  const activeStep = stepIndex(job?.status);
-  const done = job?.status === 'DONE';
-  const failed = job?.status === 'FAILED';
+  const jobs = useQuery<{ id: string; status: string; filename: string | null; totalRows: number | null; createdAt: string }[]>({ queryKey: ['ingestion', 'list'], queryFn: () => api.get('/ingestion').then((r) => r.data.items) });
 
   return (
-    <div>
-      <PageHeader title="PDF Timetable Ingestion"
-        subtitle="Generic structural parser — works for any BIT Mesra department"
-        actions={
-          <Badge color="blue">BullMQ · pdf-parse queue</Badge>
-        }
-      />
-
-      {/* Pipeline Steps */}
-      <div className="flex items-start gap-0 mb-6">
-        {STEPS.map((step, i) => {
-          const isDone   = !failed && activeStep > i;
-          const isActive = !failed && activeStep === i && !!jobId;
-          const Icon = step.icon;
-          return (
-            <div key={step.key} className="flex-1 flex flex-col items-center relative">
-              {i < STEPS.length - 1 && (
-                <div className={clsx(
-                  'absolute top-[18px] left-1/2 w-full h-0.5 transition-colors duration-500',
-                  isDone ? 'bg-emerald-400' : 'bg-slate-200'
-                )} />
-              )}
-              <div className={clsx(
-                'w-9 h-9 rounded-full flex items-center justify-center border-2 relative z-10 transition-all duration-300',
-                isDone  ? 'bg-emerald-500 border-emerald-500 text-white' :
-                isActive ? 'bg-brand-gradient border-brand-500 text-white' :
-                failed  ? 'bg-red-500 border-red-500 text-white' :
-                'bg-white border-slate-200 text-slate-400'
-              )}>
-                {isDone ? <CheckCircle className="w-4 h-4" />
-                  : isActive ? <Icon className="w-4 h-4 animate-spin" />
-                  : <span className="text-xs font-bold">{i + 1}</span>}
-              </div>
-              <div className={clsx('text-xs font-semibold mt-2 text-center',
-                isDone ? 'text-emerald-600' : isActive ? 'text-brand-700' : 'text-slate-400')}>
-                {step.label}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Upload Zone */}
+    <div className="space-y-6">
+      <PageHeader title="PDF Ingestion" subtitle="Upload a grid timetable PDF → review and correct the extracted rows → validate → commit as a draft timetable. Nothing is saved until you commit." />
       <Card>
-        <div {...getRootProps()} className={clsx(
-          'border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all',
-          isDragActive ? 'border-brand-500 bg-brand-50' : 'border-slate-200 hover:border-brand-300 hover:bg-brand-50/30',
-          uploadMutation.isPending && 'pointer-events-none opacity-60'
-        )}>
-          <input {...getInputProps()} />
-          <div className="text-4xl mb-3">📄</div>
-          <div className="text-base font-semibold text-slate-700 mb-1">
-            {isDragActive ? 'Drop the PDF here' : 'Drop BIT Mesra timetable PDF here'}
-          </div>
-          <div className="text-sm text-slate-400 mb-5">
-            Any department: CSE, ECE, ME, CE… · Generic parser · Max 10 MB
-          </div>
-          <Button loading={uploadMutation.isPending} icon={<Upload className="w-3.5 h-3.5" />}>
-            {uploadMutation.isPending ? 'Uploading…' : 'Choose PDF'}
-          </Button>
-        </div>
-
-        {/* Parser Architecture Note */}
-        <div className="mt-5 bg-slate-50 rounded-xl p-4 border border-surface-border">
-          <div className="text-xs font-bold text-slate-600 mb-2">Parser Pipeline (pdfParser.ts)</div>
-          <div className="font-mono text-[11px] text-slate-500 space-y-0.5 leading-relaxed">
-            {[
-              '1. Extract text items + XY positions via pdfjs-dist',
-              '2. Group rows by Y-coordinate bucketing (8pt tolerance)',
-              '3. Auto-detect metadata: Dept, Branch, Semester',
-              '4. Build column-X → Period map from header row',
-              '5. Tokenize cells → (course_abbr, room_code) pairs',
-              '6. Resolve courses: exact match + Levenshtein ≤ 3',
-              '7. Resolve rooms: create if new; split composite "X/Y"',
-              '8. Upsert TimetableSlots with conflict detection',
-              '9. Enqueue analytics-recompute → live WS broadcast',
-            ].map(s => <div key={s}>{s}</div>)}
-          </div>
+        <div {...getRootProps()} className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer ${isDragActive ? 'border-brand-400 bg-brand-50' : 'border-surface-border'}`}>
+          <input {...getInputProps()} aria-label="PDF file" />
+          <Upload className="w-6 h-6 mx-auto text-slate-400 mb-2" />
+          <p className="text-sm text-slate-600">{uploading ? 'Uploading…' : 'Drop a timetable PDF here, or click to choose (max 10 MB)'}</p>
         </div>
       </Card>
-
-      {/* Job Status Card */}
-      {job && (
-        <Card className="mt-4">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <div className="text-sm font-bold text-slate-700">
-                Processing: {job.filename ?? 'uploaded file'}
-              </div>
-              <div className="text-xs text-slate-400 mt-0.5 font-mono">Job {job.id}</div>
-            </div>
-            <Badge
-              color={done ? 'green' : failed ? 'red' : 'amber'}
-              dot
-            >
-              {job.status}
-            </Badge>
-          </div>
-
-          {/* Stats */}
-          <div className="grid grid-cols-3 gap-4 mb-5">
-            {[
-              { label: 'Entities Created', value: job.createdRows, color: 'text-emerald-600', bg: 'bg-emerald-50' },
-              { label: 'Matched Existing', value: job.matchedRows, color: 'text-brand-700',   bg: 'bg-brand-50' },
-              { label: 'Rows Failed',       value: job.failedRows,  color: 'text-red-600',    bg: 'bg-red-50' },
-            ].map(s => (
-              <div key={s.label} className={clsx('rounded-xl p-4 text-center', s.bg)}>
-                <div className={clsx('text-2xl font-bold', s.color)}>{s.value}</div>
-                <div className="text-xs text-slate-500 mt-1">{s.label}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Error Log */}
-          {(job.errorLog?.length ?? 0) > 0 && (
-            <div>
-              <div className="text-xs font-bold text-red-600 mb-2 flex items-center gap-1.5">
-                <AlertTriangle className="w-3.5 h-3.5" />
-                Parsing Warnings / Errors ({job.errorLog!.length})
-              </div>
-              <div className="bg-slate-900 rounded-xl p-4 space-y-1.5 max-h-48 overflow-y-auto">
-                {job.errorLog!.map((e, i) => (
-                  <div key={i} className="font-mono text-[11px] text-slate-300 flex gap-3">
-                    <span className="text-slate-500 flex-shrink-0">{e.context ?? ('row ' + (e.row ?? i + 1))}</span>
-                    <span>{e.reason}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {done && (
-            <div className="mt-4 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-sm text-emerald-700 font-semibold flex items-center gap-2">
-              <CheckCircle className="w-4 h-4" />
-              Ingestion complete. Dashboard analytics have been automatically recalculated.
-            </div>
-          )}
-        </Card>
-      )}
+      {jobId && <Review key={jobId} jobId={jobId} onDone={() => qc.invalidateQueries({ queryKey: ['ingestion'] })} />}
+      <Card>
+        <h2 className="text-sm font-bold mb-3">Recent PDF jobs</h2>
+        {!jobs.data?.length ? <p className="text-sm text-slate-400">No jobs yet.</p> : (
+          <ul className="divide-y divide-surface-border text-sm">{jobs.data.map((j) => (
+            <li key={j.id} className="py-2 flex items-center gap-3"><span className="truncate">{j.filename}</span><Badge color={j.status === 'DONE' ? 'green' : j.status === 'FAILED' ? 'red' : j.status === 'AWAITING_REVIEW' ? 'amber' : 'slate'}>{j.status}</Badge>
+              {j.status === 'AWAITING_REVIEW' && <Button size="sm" variant="secondary" className="ml-auto" onClick={() => setJobId(j.id)}>Review</Button>}</li>))}</ul>
+        )}
+      </Card>
     </div>
+  );
+}
+
+function Review({ jobId, onDone }: { jobId: string; onDone: () => void }) {
+  const { data: job } = useQuery<Job>({ queryKey: ['ingestion', jobId], queryFn: () => api.get(`/ingestion/${jobId}`).then((r) => r.data), refetchInterval: (q) => (['QUEUED', 'PROCESSING'].includes(q.state.data?.status ?? 'QUEUED') ? 1000 : false) });
+  const { current } = useCurrentSemester();
+  const { data: sections = [] } = useSections(current?.id);
+  const { data: fac } = useFacultyProfiles();
+  const { data: sem } = useQuery<Semester>({ queryKey: ['semester', current?.id], enabled: !!current, queryFn: () => api.get(`/semesters/${current!.id}`).then((r) => r.data) });
+  const [rows, setRows] = useState<Row[] | null>(null);
+  const [sectionId, setSectionId] = useState('');
+  const [issues, setIssues] = useState<Issue[]>([]);
+  const [validated, setValidated] = useState(false);
+  const [committed, setCommitted] = useState<number | null>(null);
+  useEffect(() => { if (job?.payload && rows === null) setRows(job.payload.rows); }, [job, rows]);
+
+  const labels = (sem?.periods ?? []).filter((p) => !p.isBreak).map((p) => p.label);
+  const target = { semesterId: current?.id as number, sectionId: Number(sectionId) };
+  const edit = (id: string, patch: Partial<Row>) => { setRows((rows ?? []).map((r) => (r.id === id ? { ...r, ...patch } : r))); setValidated(false); };
+  const save = useApiMutation(() => api.put(`/ingestion/${jobId}/payload`, { meta: job?.payload?.meta ?? {}, rows }), { success: 'Edits saved' });
+  const validate = useApiMutation(async () => { await api.put(`/ingestion/${jobId}/payload`, { meta: job?.payload?.meta ?? {}, rows }); return api.post(`/ingestion/${jobId}/validate`, target).then((r) => r.data as { ok: boolean; issues: Issue[] }); },
+    { onSuccess: (r) => { setIssues(r.issues); setValidated(r.ok); toast[r.ok ? 'success' : 'error'](r.ok ? 'Validation passed' : `${r.issues.filter((i) => i.severity === 'error').length} problem(s) to fix`); } });
+  const commit = useApiMutation(() => api.post(`/ingestion/${jobId}/commit`, { ...target, name: job?.payload?.meta?.title?.slice(0, 120) }).then((r) => r.data as { generationId: number }),
+    { success: 'Imported as a draft timetable', onSuccess: (r) => { setCommitted(r.generationId); onDone(); } });
+  const discard = useApiMutation(() => api.post(`/ingestion/${jobId}/discard`), { success: 'Discarded', onSuccess: () => { setRows([]); onDone(); } });
+
+  if (!job) return null;
+  if (job.status === 'QUEUED' || job.status === 'PROCESSING') return <Card><p className="text-sm mb-2">Extracting {job.filename}…</p><ProgressBar value={job.progress} showLabel /></Card>;
+  if (job.status === 'FAILED') return <Card><p className="text-sm text-red-600 font-semibold">Extraction failed</p><p className="text-xs text-slate-500 mt-1">{job.errorLog?.[0]?.reason}</p></Card>;
+  if (committed || job.status === 'DONE') return <Card><p className="text-sm text-emerald-700 font-semibold flex items-center gap-2"><CheckCheck className="w-4 h-4" />Imported.</p>{(committed ?? job.committedGenerationId) && <Link to={`/timetables/${committed ?? job.committedGenerationId}`}><Button className="mt-3">Open the imported timetable</Button></Link>}</Card>;
+  if (job.status === 'CANCELLED') return <Card><p className="text-sm text-slate-500">This import was discarded.</p></Card>;
+
+  const issueOf = (id: string) => issues.filter((i) => i.rowId === id);
+  const general = issues.filter((i) => !i.rowId);
+  const errors = issues.filter((i) => i.severity === 'error').length;
+  const meta = job.payload?.meta ?? {};
+  return (
+    <Card>
+      <div className="flex flex-wrap items-end gap-4 mb-4">
+        <div><h2 className="text-sm font-bold">Review extracted rows</h2><p className="text-xs text-slate-500">{job.filename} · detected {Object.entries(meta).filter(([k]) => k !== 'title').map(([k, v]) => `${k}: ${v}`).join(' · ') || 'no metadata'}</p></div>
+        <SemesterPicker />
+        <div className="w-56"><Select aria-label="Target section" value={sectionId} onChange={(e) => { setSectionId(e.target.value); setValidated(false); }} options={sections.map((s) => ({ value: s.id, label: `${s.program.code}-${s.yearOfStudy}${s.name}` }))} placeholder="Import into section…" /></div>
+      </div>
+      {general.length > 0 && <ul className="text-xs mb-3 space-y-0.5">{general.map((g, i) => <li key={i} className={g.severity === 'error' ? 'text-red-600' : 'text-amber-600'}>{g.severity === 'error' ? '✕' : '⚠'} {g.message}</li>)}</ul>}
+      {!rows?.length ? <EmptyState icon="📄" title="No rows left" /> : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs"><thead><tr className="text-left text-slate-500"><th>Day</th><th>Period</th><th>Subject</th><th>Room</th><th>Faculty</th><th>Batch</th><th>Len</th><th>Printed</th><th /></tr></thead>
+            <tbody>{rows.map((r) => {
+              const iss = issueOf(r.id);
+              return (
+                <tr key={r.id} className={`border-t border-surface-border align-top ${iss.some((i) => i.severity === 'error') ? 'bg-red-50/60' : ''}`} data-row={r.id}>
+                  <td><select className="select !py-1" aria-label={`Day ${r.id}`} value={r.day} onChange={(e) => edit(r.id, { day: e.target.value as Day })}>{ALL_DAYS.map((d) => <option key={d}>{d}</option>)}</select></td>
+                  <td><select className="select !py-1" aria-label={`Period ${r.id}`} value={r.periodLabel} onChange={(e) => edit(r.id, { periodLabel: e.target.value })}>{[...new Set([r.periodLabel, ...labels])].map((l) => <option key={l}>{l}</option>)}</select></td>
+                  <td><input className="input !py-1 w-24" aria-label={`Subject ${r.id}`} value={r.subjectCode} onChange={(e) => edit(r.id, { subjectCode: e.target.value })} /></td>
+                  <td><input className="input !py-1 w-20" aria-label={`Room ${r.id}`} value={r.roomNumber ?? ''} onChange={(e) => edit(r.id, { roomNumber: e.target.value || null })} /></td>
+                  <td><select className="select !py-1" aria-label={`Faculty ${r.id}`} value={r.facultyProfileId ?? ''} onChange={(e) => edit(r.id, { facultyProfileId: e.target.value ? Number(e.target.value) : null })}><option value="">—</option>{fac?.items.map((p) => <option key={p.id} value={p.id}>{p.user.name}</option>)}</select></td>
+                  <td><input className="input !py-1 w-14" aria-label={`Batch ${r.id}`} value={r.batchName ?? ''} onChange={(e) => edit(r.id, { batchName: e.target.value || null })} /></td>
+                  <td><input className="input !py-1 w-12" type="number" min={1} max={4} aria-label={`Length ${r.id}`} value={r.length} onChange={(e) => edit(r.id, { length: Number(e.target.value) })} /></td>
+                  <td className="text-slate-400 max-w-[120px] truncate" title={r.raw}>{r.raw}</td>
+                  <td><Button size="sm" variant="ghost" aria-label={`Remove row ${r.id}`} onClick={() => { setRows(rows.filter((x) => x.id !== r.id)); setValidated(false); }}><Trash2 className="w-3.5 h-3.5" /></Button>
+                    {iss.map((i, k) => <div key={k} className={`text-[11px] ${i.severity === 'error' ? 'text-red-600' : 'text-amber-600'}`}>{i.message}</div>)}</td>
+                </tr>);
+            })}</tbody></table>
+        </div>)}
+      <div className="flex gap-2 mt-4 flex-wrap">
+        <Button size="sm" variant="secondary" icon={<Plus className="w-3.5 h-3.5" />} onClick={() => { setRows([...(rows ?? []), { id: `n${Date.now()}`, day: 'MONDAY', periodLabel: labels[0] ?? 'I', raw: '', subjectCode: '', roomNumber: null, batchName: null, facultyProfileId: null, length: 1 }]); setValidated(false); }}>Add row</Button>
+        <Button size="sm" variant="secondary" icon={<Save className="w-3.5 h-3.5" />} loading={save.isPending} onClick={() => save.mutate(undefined as never)}>Save edits</Button>
+        <Button size="sm" icon={<ShieldCheck className="w-3.5 h-3.5" />} disabled={!sectionId || !current} loading={validate.isPending} onClick={() => validate.mutate(undefined as never)}>Validate</Button>
+        <Button size="sm" disabled={!validated} loading={commit.isPending} onClick={() => commit.mutate(undefined as never)}>Commit as draft timetable</Button>
+        <Button size="sm" variant="ghost" icon={<X className="w-3.5 h-3.5" />} onClick={() => discard.mutate(undefined as never)}>Discard</Button>
+        {errors > 0 && <span className="text-xs text-red-600 self-center">{errors} error(s) must be fixed before committing</span>}
+        {commit.isError && errData(commit.error)?.data?.code === 'VALIDATION_FAILED' && <span className="text-xs text-red-600 self-center">Validation failed — re-validate and fix the highlighted rows.</span>}
+      </div>
+    </Card>
   );
 }

@@ -13,7 +13,7 @@ export function useJobPoller(jobId: string | null) {
     enabled: !!jobId,
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      if (status === 'DONE' || status === 'FAILED') return false;
+      if (status === 'DONE' || status === 'FAILED' || status === 'AWAITING_REVIEW' || status === 'CANCELLED') return false;
       return 1500; // Poll every 1.5s while in-flight
     },
   });
